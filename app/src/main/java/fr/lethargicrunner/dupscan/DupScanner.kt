@@ -33,6 +33,8 @@ data class ScanProgress(val phase: String, val done: Int, val total: Int)
  *     des doublons — evite ~99 % des lectures) ;
  *  3. hash SHA-256 uniquement des fichiers dont la taille est partagee ;
  *  4. groupes tries par espace recuperable decroissant.
+ *
+ * total < 0 dans ScanProgress signifie "en cours, total inconnu" (inventaire).
  */
 object DupScanner {
 
@@ -46,21 +48,27 @@ object DupScanner {
     ): ScanReport {
         // Phase 1 : inventaire
         val files = ArrayList<FileInfo>()
+        var count = 0
         for (root in roots) {
             val dir = File(root)
             if (!dir.isDirectory) continue
-            dir.walkTopDown().forEach { f ->
-                try {
-                    if (!f.isFile) return@forEach
-                    if (extensions != null &&
-                        f.extension.lowercase() !in extensions
-                    ) return@forEach
-                    val size = f.length()
-                    if (size < minSize) return@forEach
-                    files.add(FileInfo(f.absolutePath, size, f.lastModified()))
-                } catch (_: SecurityException) {
+            dir.walkTopDown()
+                .onFail { _, _ -> } // repertoires illisibles (ex : Android/data) : on ignore
+                .forEach { f ->
+                    try {
+                        if (!f.isFile) return@forEach
+                        if (extensions != null &&
+                            f.extension.lowercase() !in extensions
+                        ) return@forEach
+                        val size = f.length()
+                        if (size < minSize) return@forEach
+                        files.add(FileInfo(f.absolutePath, size, f.lastModified()))
+                        if (++count % 500 == 0) {
+                            onProgress(ScanProgress("inventaire", count, -1))
+                        }
+                    } catch (_: SecurityException) {
+                    }
                 }
-            }
         }
         val totalBytes = files.sumOf { it.size }
         onProgress(ScanProgress("inventaire", files.size, files.size))
@@ -78,7 +86,9 @@ object DupScanner {
                 fi.digest = digest
                 byDigest.getOrPut(fi.size to digest) { mutableListOf() }.add(fi)
             }
-            onProgress(ScanProgress("hachage", i + 1, candidates.size))
+            if ((i + 1) % 10 == 0 || i + 1 == candidates.size) {
+                onProgress(ScanProgress("hachage", i + 1, candidates.size))
+            }
         }
 
         val groups = byDigest.values
