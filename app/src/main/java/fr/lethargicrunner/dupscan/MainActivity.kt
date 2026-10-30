@@ -293,6 +293,49 @@ fun DupScanApp(activity: ComponentActivity) {
                             }
                         }
                     }
+                    // --- Selection des dossiers ---
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Dossiers a scanner", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    selected.size.toString() + " coche(s)",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (selected.isEmpty()) {
+                                Text(
+                                    "Aucun dossier selectionne. Utilise le navigateur pour choisir les dossiers a scanner.",
+                                    fontSize = 13.sp,
+                                )
+                            } else {
+                                selected.sorted().forEach { folder ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val viaParent = scanPaths.none { folder == it }
+                                        Text(
+                                            folder + if (viaParent) "  (recouvert par un dossier parent)" else "",
+                                            Modifier.fillMaxWidth(0.75f),
+                                            fontSize = 12.sp,
+                                        )
+                                        TextButton(onClick = {
+                                            selected.remove(folder)
+                                            saveSelection(activity, selected)
+                                        }) { Text("Retirer") }
+                                    }
+                                }
+                            }
+                            Button(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Naviguer et cocher des dossiers")
+                            }
+                            OutlinedTextField(
+                                value = extFilter,
+                                onValueChange = { extFilter = it },
+                                label = { Text("Extensions (ex : mp3,m4a — vide = tous fichiers)") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -407,50 +450,6 @@ fun FolderPickerScreen(
                             fontWeight = if (isHidden) FontWeight.Bold else FontWeight.Normal,
                         )
                     }
-                    // --- Selection des dossiers ---
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Dossiers a scanner", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    selected.size.toString() + " coche(s)",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (selected.isEmpty()) {
-                                Text(
-                                    "Aucun dossier selectionne. Utilise le navigateur pour choisir les dossiers a scanner.",
-                                    fontSize = 13.sp,
-                                )
-                            } else {
-                                selected.sorted().forEach { folder ->
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        val viaParent = scanPaths.none { folder == it }
-                                        Text(
-                                            folder + if (viaParent) "  (recouvert par un dossier parent)" else "",
-                                            Modifier.fillMaxWidth(0.75f),
-                                            fontSize = 12.sp,
-                                        )
-                                        TextButton(onClick = {
-                                            selected.remove(folder)
-                                            saveSelection(activity, selected)
-                                        }) { Text("Retirer") }
-                                    }
-                                }
-                            }
-                            Button(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Naviguer et cocher des dossiers")
-                            }
-                            OutlinedTextField(
-                                value = extFilter,
-                                onValueChange = { extFilter = it },
-                                label = { Text("Extensions (ex : mp3,m4a — vide = tous fichiers)") },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-
                 }
             }
         }
