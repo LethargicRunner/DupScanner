@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Note 1 (pleine) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M30,64 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M47,36 h4 v28 h-4 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M51,36 c9,3 11,11 8,18 c-2,-1 -4,-3 -5,-5 c2,-4 1,-9 -3,-11 z" />
+
+    <!-- Note 2 (plus claire, en retrait — l'idee de doublon) -->
+    <group android:translateX="20" android:translateY="12">
+        <path
+            android:fillColor="#B3FFFFFF"
+            android:pathData="M30,64 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 z" />
+        <path
+            android:fillColor="#B3FFFFFF"
+            android:pathData="M47,36 h4 v28 h-4 z" />
+        <path
+            android:fillColor="#B3FFFFFF"
+            android:pathData="M51,36 c9,3 11,11 8,18 c-2,-1 -4,-3 -5,-5 c2,-4 1,-9 -3,-11 z" />
+    </group>
+</vector>
