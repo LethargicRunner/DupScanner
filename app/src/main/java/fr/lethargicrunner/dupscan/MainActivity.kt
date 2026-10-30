@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -59,6 +60,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -121,7 +124,7 @@ fun DupScanApp(activity: ComponentActivity) {
     val selected = remember { loadSelection(activity).toMutableStateList() }
     var showPicker by remember { mutableStateOf(false) }
     var extFilter by remember { mutableStateOf("mp3") }
-    var report by remember { mutableStateOf<ScanReport?>(null) }
+    var report by remember { mutableStateOf<ScanReport?>(loadReport(activity)) }
     var progress by remember { mutableStateOf<ScanProgress?>(null) }
     var scanning by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -152,7 +155,7 @@ fun DupScanApp(activity: ComponentActivity) {
             color = MaterialTheme.colorScheme.background,
         ) {
             Column(
-                Modifier.padding(16.dp).fillMaxSize(),
+                Modifier.padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (!hasAccess) {
@@ -177,50 +180,6 @@ fun DupScanApp(activity: ComponentActivity) {
                         }
                     }
                 } else {
-                    // --- Selection des dossiers ---
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Dossiers a scanner", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    selected.size.toString() + " coche(s)",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (selected.isEmpty()) {
-                                Text(
-                                    "Aucun dossier selectionne. Utilise le navigateur pour choisir les dossiers a scanner.",
-                                    fontSize = 13.sp,
-                                )
-                            } else {
-                                selected.sorted().forEach { folder ->
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        val viaParent = scanPaths.none { folder == it }
-                                        Text(
-                                            folder + if (viaParent) "  (recouvert par un dossier parent)" else "",
-                                            Modifier.fillMaxWidth(0.75f),
-                                            fontSize = 12.sp,
-                                        )
-                                        TextButton(onClick = {
-                                            selected.remove(folder)
-                                            saveSelection(activity, selected)
-                                        }) { Text("Retirer") }
-                                    }
-                                }
-                            }
-                            Button(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Naviguer et cocher des dossiers")
-                            }
-                            OutlinedTextField(
-                                value = extFilter,
-                                onValueChange = { extFilter = it },
-                                label = { Text("Extensions (ex : mp3,m4a — vide = tous fichiers)") },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-
                     Button(
                         onClick = {
                             if (!scanning) {
@@ -238,6 +197,7 @@ fun DupScanApp(activity: ComponentActivity) {
                                         }
                                     }
                                     report = result
+                                    saveReport(activity, result)
                                     scanning = false
                                     progress = null
                                 }
@@ -289,12 +249,16 @@ fun DupScanApp(activity: ComponentActivity) {
                                     TextButton(onClick = { expandedGroups.value = emptySet() }) {
                                         Text("Tout replier")
                                     }
+                                    TextButton(onClick = {
+                                        report = null
+                                        clearReport(activity)
+                                    }) { Text("Effacer le rapport") }
                                 }
                             }
                         }
 
-                        LazyColumn {
-                            itemsIndexed(r.groups) { i, g ->
+                        Column {
+                            r.groups.take(500).forEachIndexed { i, g ->
                                 Card(
                                     Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
                                         expandedGroups.value =
@@ -443,6 +407,50 @@ fun FolderPickerScreen(
                             fontWeight = if (isHidden) FontWeight.Bold else FontWeight.Normal,
                         )
                     }
+                    // --- Selection des dossiers ---
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Dossiers a scanner", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    selected.size.toString() + " coche(s)",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (selected.isEmpty()) {
+                                Text(
+                                    "Aucun dossier selectionne. Utilise le navigateur pour choisir les dossiers a scanner.",
+                                    fontSize = 13.sp,
+                                )
+                            } else {
+                                selected.sorted().forEach { folder ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val viaParent = scanPaths.none { folder == it }
+                                        Text(
+                                            folder + if (viaParent) "  (recouvert par un dossier parent)" else "",
+                                            Modifier.fillMaxWidth(0.75f),
+                                            fontSize = 12.sp,
+                                        )
+                                        TextButton(onClick = {
+                                            selected.remove(folder)
+                                            saveSelection(activity, selected)
+                                        }) { Text("Retirer") }
+                                    }
+                                }
+                            }
+                            Button(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Naviguer et cocher des dossiers")
+                            }
+                            OutlinedTextField(
+                                value = extFilter,
+                                onValueChange = { extFilter = it },
+                                label = { Text("Extensions (ex : mp3,m4a — vide = tous fichiers)") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+
                 }
             }
         }
@@ -484,4 +492,55 @@ fun buildCsv(r: ScanReport): String {
         }
     }
     return sb.toString()
+}
+
+// ---------- Persistance du rapport ----------
+
+private fun reportFile(activity: ComponentActivity): File = File(activity.filesDir, "last_report.json")
+
+fun saveReport(activity: ComponentActivity, r: ScanReport) {
+    try {
+        val groups = JSONArray()
+        r.groups.take(2000).forEach { g ->
+            val files = JSONArray()
+            g.files.forEach { f ->
+                files.put(JSONArray().put(f.path).put(f.size).put(f.mtime).put(f.digest ?: ""))
+            }
+            groups.put(files)
+        }
+        val json = JSONObject()
+            .put("scanned", r.scanned)
+            .put("totalBytes", r.totalBytes)
+            .put("groups", groups)
+        reportFile(activity).writeText(json.toString())
+    } catch (_: Exception) {
+    }
+}
+
+fun clearReport(activity: ComponentActivity) {
+    reportFile(activity).delete()
+}
+
+fun loadReport(activity: ComponentActivity): ScanReport? {
+    return try {
+        val f = reportFile(activity)
+        if (!f.exists()) return null
+        val json = JSONObject(f.readText())
+        val groups = ArrayList<DupGroup>()
+        val arr = json.getJSONArray("groups")
+        for (i in 0 until arr.length()) {
+            val filesArr = arr.getJSONArray(i)
+            val files = ArrayList<FileInfo>()
+            for (j in 0 until filesArr.length()) {
+                val fa = filesArr.getJSONArray(j)
+                val fi = FileInfo(fa.getString(0), fa.getLong(1), fa.getLong(2))
+                fi.digest = if (fa.getString(3).isEmpty()) null else fa.getString(3)
+                files.add(fi)
+            }
+            groups.add(DupGroup(files))
+        }
+        ScanReport(json.getInt("scanned"), json.getLong("totalBytes"), groups)
+    } catch (_: Exception) {
+        null
+    }
 }
