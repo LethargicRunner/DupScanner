@@ -130,6 +130,7 @@ fun DupScanApp(activity: ComponentActivity) {
 
     if (showPicker) {
         FolderPickerScreen(
+            volumeRoots = detectVolumes(activity),
             selected = selected,
             onToggle = { path ->
                 if (selected.contains(path)) selected.remove(path) else selected.add(path)
@@ -335,14 +336,31 @@ fun DupScanApp(activity: ComponentActivity) {
 
 // ---------- Ecran de navigation des dossiers ----------
 
+/** Detecte les volumes accessibles : interne + cartes SD eventuelles. */
+fun detectVolumes(activity: ComponentActivity): List<Pair<String, String>> {
+    val vols = mutableListOf<Pair<String, String>>()
+    val internal = Environment.getExternalStorageDirectory().absolutePath
+    vols.add("Interne" to internal)
+    activity.getExternalFilesDirs(null).forEach { dir ->
+        if (dir != null) {
+            val root = dir.absolutePath.substringBefore("/Android/data/")
+            if (root != internal && vols.none { it.second == root }) {
+                vols.add("Carte SD" to root)
+            }
+        }
+    }
+    return vols
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FolderPickerScreen(
+    volumeRoots: List<Pair<String, String>>,
     selected: List<String>,
     onToggle: (String) -> Unit,
     onDone: () -> Unit,
 ) {
-    var currentPath by remember { mutableStateOf("/storage") }
+    var currentPath by remember { mutableStateOf(volumeRoots.first().second) }
 
     val folders = remember(currentPath) {
         File(currentPath).listFiles()
@@ -362,12 +380,28 @@ fun FolderPickerScreen(
         },
     ) { innerPadding ->
         Column(Modifier.padding(innerPadding).padding(16.dp).fillMaxSize()) {
+            // Volumes disponibles
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                volumeRoots.forEach { (label, root) ->
+                    FilterChip(
+                        selected = currentPath.startsWith(root),
+                        onClick = { currentPath = root },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
             // Fil d'Ariane
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                val segments = currentPath.split('/').filter { it.isNotEmpty() }
-                var acc = ""
-                TextButton(onClick = { currentPath = "/storage" }) { Text("/") }
-                segments.forEach { seg ->
+                val root = volumeRoots.first { currentPath.startsWith(it.second) }.second
+                val rest = currentPath.removePrefix(root).split('/').filter { it.isNotEmpty() }
+                var acc = root
+                TextButton(onClick = { currentPath = root }) { Text("/") }
+                rest.forEach { seg ->
                     acc += "/" + seg
                     val target = acc
                     Text("/", fontSize = 13.sp)
