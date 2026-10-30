@@ -1,6 +1,8 @@
 package fr.lethargicrunner.dupscan
 
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -9,6 +11,7 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,13 +22,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -42,11 +45,11 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +70,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// ---------- Theme ----------
+
 @Composable
 fun DupScanTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
@@ -80,31 +85,40 @@ fun DupScanTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
-data class StorageInfo(val label: String, val path: String)
+// ---------- Selection persistante ----------
 
-/** Detecte toutes les memoires disponibles : interne + cartes SD eventuelles. */
-fun detectStorages(): List<StorageInfo> {
-    val list = mutableListOf<StorageInfo>()
-    val internal = Environment.getExternalStorageDirectory().absolutePath
-    list.add(StorageInfo("Memoire interne", internal))
-    File("/storage").listFiles()
-        ?.filter {
-            it.isDirectory && it.canRead() &&
-                it.name != "emulated" && it.name != "self"
-        }
-        ?.forEach { list.add(StorageInfo("Carte de stockage", it.absolutePath)) }
-    return list
+private const val PREFS = "dupscan_prefs"
+private const val KEY_FOLDERS = "selected_folders"
+
+fun loadSelection(activity: ComponentActivity): MutableList<String> {
+    val prefs: SharedPreferences = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    return prefs.getStringSet(KEY_FOLDERS, emptySet())?.toMutableList() ?: mutableListOf()
 }
+
+fun saveSelection(activity: ComponentActivity, folders: List<String>) {
+    val prefs: SharedPreferences = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    prefs.edit().putStringSet(KEY_FOLDERS, folders.toSet()).apply()
+}
+
+/** Absorbe les doublons de selection : un dossier coche recouvre ses descendants. */
+fun absorbedPaths(selected: List<String>): List<String> =
+    selected.filter { p ->
+        selected.none { o ->
+            o != p && p.startsWith(o.trimEnd('/') + "/")
+        }
+    }
+
+/** Un fichier est "cache" si un segment de son chemin commence par un point. */
+fun isHiddenPath(path: String): Boolean =
+    path.split('/').any { it.startsWith(".") && it.length > 1 }
+
+// ---------- Application ----------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DupScanApp(activity: ComponentActivity) {
-    val storages = remember { detectStorages() }
-    val selected = remember {
-        mutableStateMapOf<String, Boolean>().apply { storages.forEach { put(it.path, true) } }
-    }
-    val customRoots = remember { mutableStateListOf<String>() }
-    var newRoot by remember { mutableStateOf("") }
+    val selected = remember { loadSelection(activity).toMutableStateList() }
+    var showPicker by remember { mutableStateOf(false) }
     var extFilter by remember { mutableStateOf("mp3") }
     var report by remember { mutableStateOf<ScanReport?>(null) }
     var progress by remember { mutableStateOf<ScanProgress?>(null) }
@@ -113,6 +127,20 @@ fun DupScanApp(activity: ComponentActivity) {
     var hasAccess by remember { mutableStateOf(Environment.isExternalStorageManager()) }
     val expandedGroups = remember { mutableStateOf(setOf(0)) }
     val scope = rememberCoroutineScope()
+
+    if (showPicker) {
+        FolderPickerScreen(
+            selected = selected,
+            onToggle = { path ->
+                if (selected.contains(path)) selected.remove(path) else selected.add(path)
+                saveSelection(activity, selected)
+            },
+            onDone = { showPicker = false },
+        )
+        return
+    }
+
+    val scanPaths = absorbedPaths(selected)
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("DupScan") }) },
@@ -147,46 +175,40 @@ fun DupScanApp(activity: ComponentActivity) {
                         }
                     }
                 } else {
-                    // --- Selection des memoires ---
+                    // --- Selection des dossiers ---
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Memoires a scanner", style = MaterialTheme.typography.titleMedium)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                storages.forEach { s ->
-                                    FilterChip(
-                                        selected = selected[s.path] == true,
-                                        onClick = { selected[s.path] = !(selected[s.path] ?: false) },
-                                        label = {
-                                            Column {
-                                                Text(s.label, fontSize = 13.sp)
-                                                Text(s.path, fontSize = 10.sp)
-                                            }
-                                        },
-                                    )
-                                }
-                            }
-                            if (customRoots.isNotEmpty()) {
-                                Text("Dossiers personnalises :", fontSize = 13.sp)
-                                customRoots.forEach { root ->
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text(root, Modifier.fillMaxWidth(0.7f), fontSize = 12.sp)
-                                        TextButton(onClick = { customRoots.remove(root) }) { Text("Retirer") }
-                                    }
-                                }
-                            }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = newRoot,
-                                    onValueChange = { newRoot = it },
-                                    label = { Text("Chemin a ajouter (optionnel)") },
-                                    modifier = Modifier.fillMaxWidth(0.7f),
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Dossiers a scanner", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    selected.size.toString() + " coche(s)",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                Button(onClick = {
-                                    if (newRoot.isNotBlank()) {
-                                        customRoots.add(newRoot.trim())
-                                        newRoot = ""
+                            }
+                            if (selected.isEmpty()) {
+                                Text(
+                                    "Aucun dossier selectionne. Utilise le navigateur pour choisir les dossiers a scanner.",
+                                    fontSize = 13.sp,
+                                )
+                            } else {
+                                selected.sorted().forEach { folder ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val viaParent = scanPaths.none { folder == it }
+                                        Text(
+                                            folder + if (viaParent) "  (recouvert par un dossier parent)" else "",
+                                            Modifier.fillMaxWidth(0.75f),
+                                            fontSize = 12.sp,
+                                        )
+                                        TextButton(onClick = {
+                                            selected.remove(folder)
+                                            saveSelection(activity, selected)
+                                        }) { Text("Retirer") }
                                     }
-                                }) { Text("Ajouter") }
+                                }
+                            }
+                            Button(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Naviguer et cocher des dossiers")
                             }
                             OutlinedTextField(
                                 value = extFilter,
@@ -196,8 +218,6 @@ fun DupScanApp(activity: ComponentActivity) {
                             )
                         }
                     }
-
-                    val scanPaths = storages.filter { selected[it.path] == true }.map { it.path } + customRoots
 
                     Button(
                         onClick = {
@@ -223,17 +243,14 @@ fun DupScanApp(activity: ComponentActivity) {
                         },
                         enabled = !scanning && scanPaths.isNotEmpty(),
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (scanning) "Scan en cours…" else "Scanner les memoires selectionnees") }
+                    ) { Text(if (scanning) "Scan en cours…" else "Scanner") }
 
                     progress?.let { p ->
                         Column {
                             if (p.total > 0) {
                                 val frac = p.done.toFloat() / p.total
                                 LinearProgressIndicator(progress = { frac }, modifier = Modifier.fillMaxWidth())
-                                Text(
-                                    p.phase + " : " + p.done + " / " + p.total,
-                                    fontSize = 12.sp,
-                                )
+                                Text(p.phase + " : " + p.done + " / " + p.total, fontSize = 12.sp)
                             } else {
                                 LinearProgressIndicator(Modifier.fillMaxWidth())
                                 Text(p.phase + " : " + p.done + " fichiers…", fontSize = 12.sp)
@@ -244,7 +261,6 @@ fun DupScanApp(activity: ComponentActivity) {
                     message?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp) }
 
                     report?.let { r ->
-                        // --- Etat des lieux ---
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("Etat des lieux", style = MaterialTheme.typography.titleMedium)
@@ -267,7 +283,7 @@ fun DupScanApp(activity: ComponentActivity) {
                                             f.writeText(buildCsv(r))
                                             message = "Rapport ecrit : " + f.absolutePath
                                         }
-                                    }) { Text("Exporter le rapport CSV") }
+                                    }) { Text("Exporter CSV") }
                                     TextButton(onClick = { expandedGroups.value = emptySet() }) {
                                         Text("Tout replier")
                                     }
@@ -298,8 +314,12 @@ fun DupScanApp(activity: ComponentActivity) {
                                         if (i in expandedGroups.value) {
                                             Spacer(Modifier.height(4.dp))
                                             g.files.sortedBy { it.mtime }.forEach { f ->
-                                                val mark = if (f == g.oldest) "  [le plus ancien]" else ""
-                                                Text("• " + human(f.size) + "  " + f.path + mark, fontSize = 12.sp)
+                                                val hidden = if (isHiddenPath(f.path)) " [cache]" else ""
+                                                val oldest = if (f == g.oldest) "  [le plus ancien]" else ""
+                                                Text(
+                                                    "• " + human(f.size) + "  " + f.path + hidden + oldest,
+                                                    fontSize = 12.sp,
+                                                )
                                             }
                                         }
                                     }
@@ -312,6 +332,89 @@ fun DupScanApp(activity: ComponentActivity) {
         }
     }
 }
+
+// ---------- Ecran de navigation des dossiers ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FolderPickerScreen(
+    selected: List<String>,
+    onToggle: (String) -> Unit,
+    onDone: () -> Unit,
+) {
+    var currentPath by remember { mutableStateOf("/storage") }
+
+    val folders = remember(currentPath) {
+        File(currentPath).listFiles()
+            ?.filter { it.isDirectory && it.canRead() }
+            ?.sortedBy { it.name.lowercase() }
+            ?: emptyList()
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Selection des dossiers") },
+                navigationIcon = {
+                    TextButton(onClick = onDone) { Text("Terminer") }
+                },
+            )
+        },
+    ) { innerPadding ->
+        Column(Modifier.padding(innerPadding).padding(16.dp).fillMaxSize()) {
+            // Fil d'Ariane
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                val segments = currentPath.split('/').filter { it.isNotEmpty() }
+                var acc = ""
+                TextButton(onClick = { currentPath = "/storage" }) { Text("/") }
+                segments.forEach { seg ->
+                    acc += "/" + seg
+                    val target = acc
+                    Text("/", fontSize = 13.sp)
+                    TextButton(onClick = { currentPath = target }) { Text(seg, fontSize = 13.sp) }
+                }
+            }
+
+            Text(
+                "Coche = scanner ce dossier et tout son contenu. Touche le nom pour entrer dedans.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            LazyColumn {
+                items(folders, key = { it.absolutePath }) { dir ->
+                    val path = dir.absolutePath
+                    val ancestors = generateSequence(path) {
+                        it.substringBeforeLast('/').ifEmpty { null }
+                    }.filter { it != path }.toList()
+                    val viaParent = ancestors.any { it in selected }
+                    val checked = viaParent || path in selected
+                    val isHidden = dir.name.startsWith(".")
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            enabled = !viaParent,
+                            onCheckedChange = { onToggle(path) },
+                        )
+                        Text(
+                            dir.name + (if (isHidden) "  (cache)" else "") +
+                                (if (viaParent) "  — inclus via un dossier parent" else ""),
+                            Modifier.weight(1f).clickable { currentPath = path }.padding(vertical = 12.dp),
+                            fontSize = 14.sp,
+                            fontWeight = if (isHidden) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------- Utilitaires ----------
 
 @Composable
 fun Stat(value: String, label: String) {
