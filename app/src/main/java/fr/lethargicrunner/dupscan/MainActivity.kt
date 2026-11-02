@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -52,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -116,6 +116,12 @@ fun absorbedPaths(selected: List<String>): List<String> =
 fun isHiddenPath(path: String): Boolean =
     path.split('/').any { it.startsWith(".") && it.length > 1 }
 
+/** Par defaut, on garde le plus recent d'un groupe et on coche tous les autres. */
+fun defaultChecked(g: DupGroup): Map<String, Boolean> {
+    val newest = g.files.maxBy { it.mtime }
+    return g.files.associate { f -> f.path to (f != newest) }
+}
+
 // ---------- Application ----------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,6 +129,7 @@ fun isHiddenPath(path: String): Boolean =
 fun DupScanApp(activity: ComponentActivity) {
     val selected = remember { loadSelection(activity).toMutableStateList() }
     var showPicker by remember { mutableStateOf(false) }
+    var showTrash by remember { mutableStateOf(false) }
     var extFilter by remember { mutableStateOf("mp3") }
     var report by remember { mutableStateOf<ScanReport?>(loadReport(activity)) }
     var progress by remember { mutableStateOf<ScanProgress?>(null) }
@@ -130,6 +137,8 @@ fun DupScanApp(activity: ComponentActivity) {
     var message by remember { mutableStateOf<String?>(null) }
     var hasAccess by remember { mutableStateOf(Environment.isExternalStorageManager()) }
     val expandedGroups = remember { mutableStateOf(setOf(0)) }
+    val checkedFiles = remember { mutableStateOf(mapOf<String, Boolean>()) }
+    var trashCount by remember { mutableStateOf(Trash.count(activity)) }
     val scope = rememberCoroutineScope()
 
     if (showPicker) {
@@ -145,10 +154,28 @@ fun DupScanApp(activity: ComponentActivity) {
         return
     }
 
+    if (showTrash) {
+        TrashScreen(
+            activity = activity,
+            onDone = { showTrash = false },
+            onChanged = { trashCount = Trash.count(activity) },
+        )
+        return
+    }
+
     val scanPaths = absorbedPaths(selected)
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("DupScan") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("DupScan") },
+                actions = {
+                    TextButton(onClick = { showTrash = true }) {
+                        Text("Corbeille (" + trashCount + ")")
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         Surface(
             Modifier.fillMaxSize().padding(innerPadding),
@@ -163,7 +190,7 @@ fun DupScanApp(activity: ComponentActivity) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("Acces aux fichiers requis", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "DupScan a besoin de l'acces a tous les fichiers pour scanner les memoires du telephone. Aucun fichier n'est jamais modifie ni supprime.",
+                                "DupScan a besoin de l'acces a tous les fichiers pour scanner les memoires du telephone. Les suppressions passent par la corbeille de l'application, restaurable a tout moment.",
                                 fontSize = 13.sp,
                             )
                             Button(onClick = {
@@ -186,6 +213,7 @@ fun DupScanApp(activity: ComponentActivity) {
                                 scanning = true
                                 report = null
                                 message = null
+                                checkedFiles.value = emptyMap()
                                 scope.launch {
                                     val exts = extFilter.split(",")
                                         .map { it.trim().lowercase() }
@@ -223,6 +251,19 @@ fun DupScanApp(activity: ComponentActivity) {
                     message?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp) }
 
                     report?.let { r ->
+                        // Nombre de fichiers coches par defaut (tout sauf le plus recent) ou a la main
+                        var selCount = 0
+                        var selBytes = 0L
+                        r.groups.forEach { g ->
+                            val defaults = defaultChecked(g)
+                            g.files.forEach { f ->
+                                if (checkedFiles.value[f.path] ?: (defaults[f.path] ?: false)) {
+                                    selCount++
+                                    selBytes += f.size
+                                }
+                            }
+                        }
+
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("Etat des lieux", style = MaterialTheme.typography.titleMedium)
@@ -235,6 +276,52 @@ fun DupScanApp(activity: ComponentActivity) {
                                     "sur " + human(r.totalBytes) + " scannes (" + r.scanned + " fichiers)",
                                     fontSize = 12.sp,
                                 )
+                                Text(
+                                    "Par defaut, le plus recent de chaque groupe est garde et les autres sont coches. Ajuste dans chaque groupe si besoin.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (selCount > 0) {
+                                    Button(
+                                        onClick = {
+                                            if (!scanning) {
+                                                scope.launch {
+                                                    val moved = withContext(Dispatchers.IO) {
+                                                        val movedList = mutableListOf<String>()
+                                                        r.groups.forEach { g ->
+                                                            val defaults = defaultChecked(g)
+                                                            g.files.forEach { f ->
+                                                                val c = checkedFiles.value[f.path]
+                                                                    ?: (defaults[f.path] ?: false)
+                                                                if (c && Trash.move(activity, f.path) != null) {
+                                                                    movedList.add(f.path)
+                                                                }
+                                                            }
+                                                        }
+                                                        movedList
+                                                    }
+                                                    val movedSet = moved.toHashSet()
+                                                    val bytes = r.groups
+                                                        .flatMap { it.files }
+                                                        .filter { it.path in movedSet }
+                                                        .sumOf { it.size }
+                                                    val newGroups = r.groups
+                                                        .map { g -> g.copy(files = g.files.filter { it.path !in movedSet }) }
+                                                        .filter { it.files.size > 1 }
+                                                    val newReport = ScanReport(r.scanned, r.totalBytes, newGroups)
+                                                    report = newReport
+                                                    saveReport(activity, newReport)
+                                                    checkedFiles.value = emptyMap()
+                                                    expandedGroups.value = emptySet()
+                                                    trashCount = Trash.count(activity)
+                                                    message = moved.size.toString() + " fichier(s) mis a la corbeille (" +
+                                                        human(bytes) + "). Consultable via le bouton Corbeille en haut."
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) { Text("Mettre a la corbeille — " + selCount + " fichier(s), " + human(selBytes)) }
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(onClick = {
                                         val dir = activity.getExternalFilesDir(null)
@@ -279,13 +366,33 @@ fun DupScanApp(activity: ComponentActivity) {
                                         )
                                         if (i in expandedGroups.value) {
                                             Spacer(Modifier.height(4.dp))
+                                            val newest = g.files.maxBy { it.mtime }
+                                            TextButton(onClick = {
+                                                checkedFiles.value = checkedFiles.value.toMutableMap().apply {
+                                                    putAll(defaultChecked(g))
+                                                }
+                                            }) { Text("Cocher tout sauf le plus recent") }
                                             g.files.sortedBy { it.mtime }.forEach { f ->
                                                 val hidden = if (isHiddenPath(f.path)) " [cache]" else ""
-                                                val oldest = if (f == g.oldest) "  [le plus ancien]" else ""
-                                                Text(
-                                                    "• " + human(f.size) + "  " + f.path + hidden + oldest,
-                                                    fontSize = 12.sp,
-                                                )
+                                                val keep = if (f == newest) "  [garde]" else ""
+                                                Row(
+                                                    Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Checkbox(
+                                                        checked = checkedFiles.value[f.path]
+                                                            ?: (f != newest),
+                                                        onCheckedChange = { v ->
+                                                            checkedFiles.value = checkedFiles.value
+                                                                .toMutableMap().apply { put(f.path, v) }
+                                                        },
+                                                    )
+                                                    Text(
+                                                        "• " + human(f.size) + "  " + f.path + hidden + keep,
+                                                        fontSize = 12.sp,
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -449,6 +556,69 @@ fun FolderPickerScreen(
                             fontSize = 14.sp,
                             fontWeight = if (isHidden) FontWeight.Bold else FontWeight.Normal,
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------- Ecran corbeille ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TrashScreen(activity: ComponentActivity, onDone: () -> Unit, onChanged: () -> Unit) {
+    var items by remember { mutableStateOf(Trash.load(activity)) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Corbeille (" + items.size + ")") },
+                navigationIcon = { TextButton(onClick = onDone) { Text("Retour") } },
+                actions = {
+                    if (items.isNotEmpty()) {
+                        TextButton(onClick = {
+                            Trash.empty(activity)
+                            items = Trash.load(activity)
+                            onChanged()
+                        }) { Text("Vider") }
+                    }
+                },
+            )
+        },
+    ) { innerPadding ->
+        Column(Modifier.padding(innerPadding).padding(16.dp).fillMaxSize()) {
+            Text(
+                "Les fichiers supprimes sont deplaces dans .DupScannerTrash, a la racine de leur memoire : " +
+                    "rien n'est definitivement perdu tant que la corbeille n'est pas videe.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            if (items.isEmpty()) {
+                Text("Corbeille vide.")
+            }
+            LazyColumn {
+                items(items, key = { it.trashPath }) { item ->
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(File(item.originalPath).name, style = MaterialTheme.typography.titleSmall)
+                            Text("Origine : " + item.originalPath, fontSize = 11.sp)
+                            Text("Taille : " + human(item.size), fontSize = 11.sp)
+                            Row {
+                                TextButton(onClick = {
+                                    if (Trash.restore(activity, item)) {
+                                        items = Trash.load(activity)
+                                        onChanged()
+                                    }
+                                }) { Text("Restaurer") }
+                                TextButton(onClick = {
+                                    Trash.deleteForever(activity, item)
+                                    items = Trash.load(activity)
+                                    onChanged()
+                                }) { Text("Supprimer definitivement") }
+                            }
+                        }
                     }
                 }
             }
